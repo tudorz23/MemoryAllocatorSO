@@ -2,7 +2,7 @@
 
 #include "osmem.h"
 
-block_meta_t *head = NULL;
+block_meta_t head;
 int heap_prealloc_done = 0;
 
 /**
@@ -11,20 +11,19 @@ int heap_prealloc_done = 0;
  * for any traversal of the list.
 */
 void head_init() {
-	head = sbrk(META_BLOCK_SIZE);
-	head->size = 0;
-	head->status = STATUS_FREE;
-	head->prev = head;
-	head->next = head;
+	head.size = 0;
+	head.status = STATUS_ALLOC;
+	head.prev = &head;
+	head.next = &head;
 }
 
 void list_add_last(block_meta_t *block) {
-	block_meta_t *last = head->prev;
+	block_meta_t *last = head.prev;
 
 	last->next = block;
 	block->prev = last;
-	block->next = head;
-	head->prev = block;
+	block->next = &head;
+	head.prev = block;
 }
 
 void list_remove_node(block_meta_t *block) {
@@ -33,9 +32,9 @@ void list_remove_node(block_meta_t *block) {
 }
 
 block_meta_t *find_free_heap_block(size_t size) {
-	block_meta_t *iterator = head->next;
+	block_meta_t *iterator = head.next;
 
-	while (iterator != head) {
+	while (iterator != &head) {
 		if (iterator->status == STATUS_FREE && iterator->size >= size) {
 			return iterator;
 		}
@@ -80,7 +79,7 @@ void *os_malloc(size_t size)
 		return NULL;
 	}
 
-	if (head == NULL) {
+	if (head.status != STATUS_ALLOC) {
 		head_init();
 	}
 
@@ -107,9 +106,9 @@ void *os_malloc(size_t size)
 }
 
 block_meta_t *search_block_to_free(void *ptr) {
-	block_meta_t *iterator = head->next;
+	block_meta_t *iterator = head.next;
 
-	while (iterator != head) {
+	while (iterator != &head) {
 		if (((char *)iterator + META_BLOCK_SIZE) == ptr) {
 			return iterator;
 		}
