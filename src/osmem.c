@@ -79,6 +79,7 @@ void *os_malloc(size_t size)
 		return NULL;
 	}
 
+	// Check if the list head has been initialized
 	if (head.status != STATUS_ALLOC) {
 		head_init();
 	}
