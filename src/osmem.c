@@ -3,6 +3,7 @@
 #include "osmem.h"
 
 block_meta_t head;
+int head_init_done = 0;
 int heap_prealloc_done = 0;
 
 /**
@@ -12,9 +13,9 @@ int heap_prealloc_done = 0;
 */
 void head_init() {
 	head.size = 0;
-	head.status = STATUS_ALLOC;
 	head.prev = &head;
 	head.next = &head;
+	head_init_done = 1;
 }
 
 void list_add_last(block_meta_t *block) {
@@ -80,7 +81,7 @@ block_meta_t *map_block_in_mem(size_t size) {
 */
 int prealloc_heap_attempt()
 {
-	if (heap_prealloc_done) {
+	if (heap_prealloc_done != 0) {
 		return 1;
 	}
 
@@ -94,6 +95,7 @@ int prealloc_heap_attempt()
 
 	block_meta_t *prealloc_block = (block_meta_t *)request_block;
 	prealloc_block->size = HEAP_PREALLOC_SIZE - META_BLOCK_SIZE;
+	prealloc_block->status = STATUS_FREE;
 	list_add_last(prealloc_block);
 
 	heap_prealloc_done = 1;
@@ -117,7 +119,7 @@ block_meta_t *find_best_block(size_t size)
 				return iterator;
 			}
 
-			if (iterator->size < best_fit->size) {
+			if (!best_fit || iterator->size < best_fit->size) {
 				best_fit = iterator;
 			}
 		}
@@ -153,6 +155,8 @@ void split_block_attempt(block_meta_t *block, size_t size)
 	new_block->size = block->size - occupied_size;
 	new_block->status = STATUS_FREE;
 
+	block->size -= occupied_size;
+
 	// Add new block in the list.
 	new_block->next = block->next;
 	new_block->prev = block;
@@ -164,27 +168,29 @@ void split_block_attempt(block_meta_t *block, size_t size)
  * Expands the last block.
  * @return the extended last block, in case of success, NULL, otherwise.
 */
-block_meta_t *expand_last_block(size)
+block_meta_t *expand_last_block(size_t size)
 {
 	block_meta_t *last_block = head.prev;
-	size_t additional__needed_size = size - last_block->size;
+	size_t additional_needed_size = size - last_block->size;
 
 	void *heap_end = (char *)last_block + META_BLOCK_SIZE + last_block->size;
 
-	heap_end = sbrk(additional__needed_size);
+	heap_end = sbrk(additional_needed_size);
 	if (heap_end == (void *) -1) {
 		return NULL;
 	}
 
+	last_block->size += additional_needed_size;
 	return last_block;
 }
 
 /**
  * Searches the list for the memory zone allocated on the heap
  * that best fits the requested @size.
- * 
+ * If no fit is found, the last block is expanded if free.
+ * If it is not free, a new block is allocated.
  * To be called when memory allocated with sbrk() is needed.
- * @return 
+ * @return allocated memory in case of success, NULL otherwise
 */
 void *request_heap_memory(size_t size)
 {
@@ -195,11 +201,13 @@ void *request_heap_memory(size_t size)
 
 	block_meta_t *best_block = find_best_block(size);
 	if (best_block) {
+		printf("Lewis Hamilton\n");
 		split_block_attempt(best_block, size);
 		best_block->status = STATUS_ALLOC;
 		return ((char *)best_block + META_BLOCK_SIZE);
 	}
 
+	
 	// There is no block able to sustain the requested size.
 	if (head.prev->status == STATUS_FREE) {
 		block_meta_t *expanded_block = expand_last_block(size);
@@ -211,6 +219,18 @@ void *request_heap_memory(size_t size)
 	}
 
 	// The last block is not free, so a new block should be added.
+	void *request_block = sbrk(META_BLOCK_SIZE + size);
+
+	if (request_block == (void *) -1) {
+		return NULL;
+	}
+
+	block_meta_t *new_block = (block_meta_t *)request_block;
+	new_block->size = size;
+	new_block->status = STATUS_ALLOC;
+	list_add_last(new_block);
+
+	return ((char *)new_block + META_BLOCK_SIZE);
 }
 
 void *os_malloc(size_t size)
@@ -220,27 +240,16 @@ void *os_malloc(size_t size)
 	}
 
 	// Check if the list head has been initialized
-	if (head.status != STATUS_ALLOC) {
+	if (!head_init_done) {
 		head_init();
 	}
 
-	// !!!!!!! The alignment is done before calling any function, so they
+	// The alignment is done before calling any function, so they
 	// ought not bother with alignment.
 	size_t aligned_size = ALIGN(size);
 
 	if (aligned_size < MMAP_THRESHOLD) {
 		return request_heap_memory(aligned_size);
-
-		block_meta_t *block = find_free_block(aligned_size);
-
-		if (!block) {
-			block = heap_alloc(size);
-			if (!block) {
-				return NULL;
-			}
-		}
-
-		return ((char *)block + META_BLOCK_SIZE);
 	} else {
 		block_meta_t *block = map_block_in_mem(size);
 		if (!block) {
@@ -248,8 +257,6 @@ void *os_malloc(size_t size)
 		}
 		return ((char *)block + META_BLOCK_SIZE);
 	}
-
-	return NULL;
 }
 
 block_meta_t *search_block_to_free(void *ptr)

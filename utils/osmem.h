@@ -23,3 +23,5 @@ int prealloc_heap_attempt();
 void *request_heap_memory(size_t size);
 block_meta_t *find_best_block(size_t size);
 void split_block_attempt(block_meta_t *block, size_t size);
+block_meta_t *expand_last_block(size_t size);
+void *request_heap_memory(size_t size);
