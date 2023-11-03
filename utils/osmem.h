@@ -6,6 +6,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "printf.h"
+#include "block_meta.h"
+#include <sys/mman.h>
+#include <unistd.h>
+
+
+#define HEAP_PREALLOC_SIZE (128 * 1024)
+#define MMAP_THRESHOLD (128 * 1024)
 
 void *os_malloc(size_t size);
 void os_free(void *ptr);
