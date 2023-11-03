@@ -31,7 +31,7 @@ void list_remove_node(block_meta_t *block) {
 	block->next->prev = block->prev;
 }
 
-block_meta_t *find_free_heap_block(size_t size) {
+block_meta_t *find_free_block(size_t size) {
 	block_meta_t *iterator = head.next;
 
 	while (iterator != &head) {
@@ -73,6 +73,146 @@ block_meta_t *map_block_in_mem(size_t size) {
 	return block;
 }
 
+/**
+ * Attempts to do the Heap Preallocation if it had not
+ * already been done.
+ * @return 1 for success, 0 otherwise.
+*/
+int prealloc_heap_attempt()
+{
+	if (heap_prealloc_done) {
+		return 1;
+	}
+
+	// Try to do the Heap Preallocation
+	void *request_block = sbrk(HEAP_PREALLOC_SIZE);
+
+	// Check if sbrk failed.
+	if (request_block == (void *) -1) {
+		return 0;
+	}
+
+	block_meta_t *prealloc_block = (block_meta_t *)request_block;
+	prealloc_block->size = HEAP_PREALLOC_SIZE - META_BLOCK_SIZE;
+	list_add_last(prealloc_block);
+
+	heap_prealloc_done = 1;
+	
+	return 1;
+}
+
+/**
+ * Traverses the list and searches for the block that best fits
+ * the @size requested.
+ * @return start adress of the best fit block, if it exists, NULL, otherwise.
+*/
+block_meta_t *find_best_block(size_t size)
+{
+	block_meta_t *iterator = head.next;
+	block_meta_t *best_fit = NULL;
+
+	while (iterator != &head) {
+		if (iterator->status == STATUS_FREE && iterator->size >= size) {
+			if (iterator->size == size) {
+				return iterator;
+			}
+
+			if (iterator->size < best_fit->size) {
+				best_fit = iterator;
+			}
+		}
+
+		iterator = iterator->next;
+	}
+
+	return best_fit;
+}
+
+/**
+ * Attempts to split the @block if enough bytes remain free
+ * after filling @size bytes.
+ * Does not change the address of @block, so it can be used freely afterwards.
+*/
+void split_block_attempt(block_meta_t *block, size_t size)
+{
+	if (block->size == size) {
+		return;
+	}
+
+	// If split happens, the payload of @block will be occupied by the
+	// requested size and a new block_meta_t structure.
+	size_t occupied_size = size + META_BLOCK_SIZE;
+
+	if (occupied_size >= block->size) {
+		// No split is performed.
+		return;
+	}
+
+	block_meta_t *new_block = (block_meta_t *)((char *)block + size);
+
+	new_block->size = block->size - occupied_size;
+	new_block->status = STATUS_FREE;
+
+	// Add new block in the list.
+	new_block->next = block->next;
+	new_block->prev = block;
+	block->next->prev = new_block;
+	block->next = new_block;
+}
+
+/**
+ * Expands the last block.
+ * @return the extended last block, in case of success, NULL, otherwise.
+*/
+block_meta_t *expand_last_block(size)
+{
+	block_meta_t *last_block = head.prev;
+	size_t additional__needed_size = size - last_block->size;
+
+	void *heap_end = (char *)last_block + META_BLOCK_SIZE + last_block->size;
+
+	heap_end = sbrk(additional__needed_size);
+	if (heap_end == (void *) -1) {
+		return NULL;
+	}
+
+	return last_block;
+}
+
+/**
+ * Searches the list for the memory zone allocated on the heap
+ * that best fits the requested @size.
+ * 
+ * To be called when memory allocated with sbrk() is needed.
+ * @return 
+*/
+void *request_heap_memory(size_t size)
+{
+	if (!prealloc_heap_attempt()) {
+		// sbrk() failed during preallocation
+		return NULL;
+	}
+
+	block_meta_t *best_block = find_best_block(size);
+	if (best_block) {
+		split_block_attempt(best_block, size);
+		best_block->status = STATUS_ALLOC;
+		return ((char *)best_block + META_BLOCK_SIZE);
+	}
+
+	// There is no block able to sustain the requested size.
+	if (head.prev->status == STATUS_FREE) {
+		block_meta_t *expanded_block = expand_last_block(size);
+		if (!expanded_block) {
+			return NULL;
+		}
+
+		return ((char *)expanded_block + META_BLOCK_SIZE);
+	}
+
+	// The last block is not free, so a new block should be added.
+}
+
 void *os_malloc(size_t size)
 {
 	if (size <= 0) {
@@ -84,11 +224,17 @@ void *os_malloc(size_t size)
 		head_init();
 	}
 
-	if (size < MMAP_THRESHOLD) {
-		block_meta_t *block = find_free_heap_block(size);
+	// !!!!!!! The alignment is done before calling any function, so they
+	// ought not bother with alignment.
+	size_t aligned_size = ALIGN(size);
+
+	if (aligned_size < MMAP_THRESHOLD) {
+		return request_heap_memory(aligned_size);
+
+		block_meta_t *block = find_free_block(aligned_size);
 
 		if (!block) {
-			block = alloc_on_heap(size);
+			block = heap_alloc(size);
 			if (!block) {
 				return NULL;
 			}
@@ -106,7 +252,8 @@ void *os_malloc(size_t size)
 	return NULL;
 }
 
-block_meta_t *search_block_to_free(void *ptr) {
+block_meta_t *search_block_to_free(void *ptr)
+{
 	block_meta_t *iterator = head.next;
 
 	while (iterator != &head) {

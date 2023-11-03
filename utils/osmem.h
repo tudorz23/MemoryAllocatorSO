@@ -18,3 +18,8 @@ void *os_malloc(size_t size);
 void os_free(void *ptr);
 void *os_calloc(size_t nmemb, size_t size);
 void *os_realloc(void *ptr, size_t size);
+
+int prealloc_heap_attempt();
+void *request_heap_memory(size_t size);
+block_meta_t *find_best_block(size_t size);
+void split_block_attempt(block_meta_t *block, size_t size);
