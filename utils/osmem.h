@@ -9,6 +9,7 @@
 #include "block_meta.h"
 #include <sys/mman.h>
 #include <unistd.h>
+#include <string.h>
 
 
 #define HEAP_PREALLOC_SIZE (128 * 1024)

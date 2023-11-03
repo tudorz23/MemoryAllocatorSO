@@ -145,12 +145,13 @@ void split_block_attempt(block_meta_t *block, size_t size)
 	// requested size and a new block_meta_t structure.
 	size_t occupied_size = size + META_BLOCK_SIZE;
 
-	if (occupied_size >= block->size) {
+	if (occupied_size + 1 >= block->size) {
 		// No split is performed.
 		return;
 	}
 
-	block_meta_t *new_block = (block_meta_t *)((char *)block + size);
+	printf("Lewis Charles\n");
+	block_meta_t *new_block = (block_meta_t *)((char *)block + META_BLOCK_SIZE + size);
 
 	new_block->size = block->size - occupied_size;
 	new_block->status = STATUS_FREE;
@@ -201,7 +202,6 @@ void *request_heap_memory(size_t size)
 
 	block_meta_t *best_block = find_best_block(size);
 	if (best_block) {
-		printf("Lewis Hamilton\n");
 		split_block_attempt(best_block, size);
 		best_block->status = STATUS_ALLOC;
 		return ((char *)best_block + META_BLOCK_SIZE);
@@ -305,8 +305,33 @@ void os_free(void *ptr)
 
 void *os_calloc(size_t nmemb, size_t size)
 {
-	/* TODO: Implement os_calloc */
-	return NULL;
+	if (nmemb == 0 || size == 0) {
+		return NULL;
+	}
+
+	if (!head_init_done) {
+		head_init();
+	} 
+
+	size_t aligned_size = ALIGN(size * nmemb);
+
+	if (aligned_size < 4080) {
+		void *result = request_heap_memory(aligned_size);
+		if (!result) {
+			return NULL;
+		}
+
+		memset(result, 0, aligned_size);
+		return result;
+	} else {
+		block_meta_t *block = map_block_in_mem(aligned_size);
+		if (!block) {
+			return NULL;
+		}
+		void *result = (char *)block + META_BLOCK_SIZE;
+		memset(result, 0, aligned_size);
+		return result;
+	}
 }
 
 void *os_realloc(void *ptr, size_t size)
