@@ -11,14 +11,19 @@ int heap_prealloc_done = 0;
  * free block, without a payload. It will only serve as the starting point
  * for any traversal of the list.
 */
-void head_init() {
+void head_init(void)
+{
 	head.size = 0;
 	head.prev = &head;
 	head.next = &head;
 	head_init_done = 1;
 }
 
-void list_add_last(block_meta_t *block) {
+/**
+ * Adds @block to the end of the linked list.
+*/
+void list_add_last(block_meta_t *block)
+{
 	block_meta_t *last = head.prev;
 
 	last->next = block;
@@ -27,40 +32,22 @@ void list_add_last(block_meta_t *block) {
 	head.prev = block;
 }
 
-void list_remove_node(block_meta_t *block) {
+/**
+ * Removes @block from the linked list.
+*/
+void list_remove_block(block_meta_t *block)
+{
 	block->prev->next = block->next;
 	block->next->prev = block->prev;
 }
 
-block_meta_t *find_free_block(size_t size) {
-	block_meta_t *iterator = head.next;
-
-	while (iterator != &head) {
-		if (iterator->status == STATUS_FREE && iterator->size >= size) {
-			return iterator;
-		}
-		iterator = iterator->next;
-	}
-
-	return NULL;
-}
-
-block_meta_t *alloc_on_heap(size_t size) {
-	block_meta_t *block = sbrk(META_BLOCK_SIZE + ALIGN(size));
-
-	if (block == (void *) -1) {
-		return NULL;
-	}
-
-	block->size = size;
-	block->status = STATUS_ALLOC;
-	list_add_last(block);
-
-	return block;
-}
-
-block_meta_t *map_block_in_mem(size_t size) {
-	size_t requested_size = (META_BLOCK_SIZE + ALIGN(size));
+/**
+ * Maps memory using mmap() and adds the newly created block to the list.
+ * @return the new block's address.
+*/
+block_meta_t *map_block_in_mem(size_t size)
+{
+	size_t requested_size = (META_BLOCK_SIZE + size);
 	block_meta_t *block = mmap(NULL, requested_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	
 	if (block == MAP_FAILED) {
@@ -133,7 +120,8 @@ block_meta_t *find_best_block(size_t size)
 /**
  * Attempts to split the @block if enough bytes remain free
  * after filling @size bytes.
- * Does not change the address of @block, so it can be used freely afterwards.
+ * Does not change the address @block points to, so
+ * it can be used freely afterwards.
 */
 void split_block_attempt(block_meta_t *block, size_t size)
 {
@@ -150,7 +138,6 @@ void split_block_attempt(block_meta_t *block, size_t size)
 		return;
 	}
 
-	printf("Lewis Charles\n");
 	block_meta_t *new_block = (block_meta_t *)((char *)block + META_BLOCK_SIZE + size);
 
 	new_block->size = block->size - occupied_size;
@@ -186,6 +173,57 @@ block_meta_t *expand_last_block(size_t size)
 }
 
 /**
+ * Coalesces two blocks, merging them into @block1,
+ * while removing @block2 from the list.
+*/
+void coalesce_blocks(block_meta_t *block1, block_meta_t *block2)
+{
+	block1->size += META_BLOCK_SIZE + block2->size;
+	list_remove_block(block2);
+}
+
+/**
+ * Traverses the list, searching for adjacent free blocks.
+ * If such blocks are found, they are coalesced into one bigger block.
+ * The coalescing is done progressively on two blocks at a time.
+*/
+void coalesce_attempt(void)
+{
+	block_meta_t *iterator = head.next;
+	block_meta_t *to_coalesce1 = NULL;
+	block_meta_t *to_coalesce2 = NULL;
+
+	while (iterator != &head) {
+		if (iterator->status == STATUS_ALLOC) {
+			to_coalesce1 = NULL;
+			to_coalesce2 = NULL;
+			iterator = iterator->next;
+			continue;
+		}
+
+		// Two free blocks separated by a mapped block can still be coalesced.
+		if (iterator->status == STATUS_MAPPED) {
+			iterator = iterator->next;
+			continue;
+		}
+
+		// Iterator surely points to a free block.
+		if (to_coalesce1 == NULL) {
+			to_coalesce1 = iterator;
+			iterator = iterator->next;
+			continue;
+		}
+
+		to_coalesce2 = iterator;
+
+		// Before coalescing the blocks, prepare iterator for the next step.
+		iterator = iterator->next;
+
+		coalesce_blocks(to_coalesce1, to_coalesce2);
+	}
+}
+
+/**
  * Searches the list for the memory zone allocated on the heap
  * that best fits the requested @size.
  * If no fit is found, the last block is expanded if free.
@@ -200,6 +238,8 @@ void *request_heap_memory(size_t size)
 		return NULL;
 	}
 
+	coalesce_attempt();
+	
 	block_meta_t *best_block = find_best_block(size);
 	if (best_block) {
 		split_block_attempt(best_block, size);
@@ -248,10 +288,10 @@ void *os_malloc(size_t size)
 	// ought not bother with alignment.
 	size_t aligned_size = ALIGN(size);
 
-	if (aligned_size < MMAP_THRESHOLD) {
+	if (aligned_size + META_BLOCK_SIZE < MMAP_THRESHOLD) {
 		return request_heap_memory(aligned_size);
 	} else {
-		block_meta_t *block = map_block_in_mem(size);
+		block_meta_t *block = map_block_in_mem(aligned_size);
 		if (!block) {
 			return NULL;
 		}
@@ -291,7 +331,7 @@ void os_free(void *ptr)
 	}
 
 	if (block->status == STATUS_MAPPED) {
-		list_remove_node(block);
+		list_remove_block(block);
 		size_t size_to_delete = META_BLOCK_SIZE + ALIGN(block->size);
 		munmap(block, size_to_delete);
 		return;
@@ -315,7 +355,7 @@ void *os_calloc(size_t nmemb, size_t size)
 
 	size_t aligned_size = ALIGN(size * nmemb);
 
-	if (aligned_size < 4080) {
+	if ((long)(aligned_size + META_BLOCK_SIZE) < (long)getpagesize()) {
 		void *result = request_heap_memory(aligned_size);
 		if (!result) {
 			return NULL;
