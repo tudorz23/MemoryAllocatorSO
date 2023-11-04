@@ -10,7 +10,7 @@ int heap_prealloc_done = 0;
  * Initialize the head of the circular list. The head will be a permanent,
  * free block, without a payload. It will only serve as the starting point
  * for any traversal of the list.
-*/
+ */
 void head_init(void)
 {
 	head.size = 0;
@@ -20,8 +20,8 @@ void head_init(void)
 }
 
 /**
- * Adds @block to the end of the linked list.
-*/
+ * Adds block to the end of the linked list.
+ */
 void list_add_last(block_meta_t *block)
 {
 	block_meta_t *last = head.prev;
@@ -33,8 +33,8 @@ void list_add_last(block_meta_t *block)
 }
 
 /**
- * Removes @block from the linked list.
-*/
+ * Removes block from the linked list.
+ */
 void list_remove_block(block_meta_t *block)
 {
 	block->prev->next = block->next;
@@ -44,12 +44,12 @@ void list_remove_block(block_meta_t *block)
 /**
  * Maps memory using mmap() and adds the newly created block to the list.
  * @return the new block's address.
-*/
+ */
 block_meta_t *map_block_in_mem(size_t size)
 {
 	size_t requested_size = (META_BLOCK_SIZE + size);
 	block_meta_t *block = mmap(NULL, requested_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	
+
 	if (block == MAP_FAILED) {
 		return NULL;
 	}
@@ -65,8 +65,8 @@ block_meta_t *map_block_in_mem(size_t size)
  * Attempts to do the Heap Preallocation if it had not
  * already been done.
  * @return 1 for success, 0 otherwise.
-*/
-int prealloc_heap_attempt()
+ */
+int prealloc_heap_attempt(void)
 {
 	if (heap_prealloc_done != 0) {
 		return 1;
@@ -86,15 +86,15 @@ int prealloc_heap_attempt()
 	list_add_last(prealloc_block);
 
 	heap_prealloc_done = 1;
-	
+
 	return 1;
 }
 
 /**
  * Traverses the list and searches for the block that best fits
- * the @size requested.
+ * the size requested.
  * @return start adress of the best fit block, if it exists, NULL, otherwise.
-*/
+ */
 block_meta_t *find_best_block(size_t size)
 {
 	block_meta_t *iterator = head.next;
@@ -118,11 +118,11 @@ block_meta_t *find_best_block(size_t size)
 }
 
 /**
- * Attempts to split the @block if enough bytes remain free
- * after filling @size bytes.
- * Does not change the address @block points to, so
+ * Attempts to split the block if enough bytes remain free
+ * after filling size bytes.
+ * Does not change the address block points to, so
  * it can be used freely afterwards.
-*/
+ */
 void split_block_attempt(block_meta_t *block, size_t size)
 {
 	if (block->size == size) {
@@ -155,7 +155,7 @@ void split_block_attempt(block_meta_t *block, size_t size)
 /**
  * Expands the last block.
  * @return the extended last block, in case of success, NULL, otherwise.
-*/
+ */
 block_meta_t *expand_last_block(size_t size)
 {
 	block_meta_t *last_block = head.prev;
@@ -173,9 +173,9 @@ block_meta_t *expand_last_block(size_t size)
 }
 
 /**
- * Coalesces two blocks, merging them into @block1,
- * while removing @block2 from the list.
-*/
+ * Coalesces two blocks, merging them into block1,
+ * while removing block2 from the list.
+ */
 void coalesce_blocks(block_meta_t *block1, block_meta_t *block2)
 {
 	block1->size += META_BLOCK_SIZE + block2->size;
@@ -186,7 +186,7 @@ void coalesce_blocks(block_meta_t *block1, block_meta_t *block2)
  * Traverses the list, searching for adjacent free blocks.
  * If such blocks are found, they are coalesced into one bigger block.
  * The coalescing is done progressively on two blocks at a time.
-*/
+ */
 void coalesce_attempt(void)
 {
 	block_meta_t *iterator = head.next;
@@ -230,7 +230,7 @@ void coalesce_attempt(void)
  * If it is not free, a new block is allocated.
  * To be called when memory allocated with sbrk() is needed.
  * @return allocated memory in case of success, NULL otherwise
-*/
+ */
 void *request_heap_memory(size_t size)
 {
 	if (!prealloc_heap_attempt()) {
@@ -239,15 +239,15 @@ void *request_heap_memory(size_t size)
 	}
 
 	coalesce_attempt();
-	
+
 	block_meta_t *best_block = find_best_block(size);
+
 	if (best_block) {
 		split_block_attempt(best_block, size);
 		best_block->status = STATUS_ALLOC;
 		return ((char *)best_block + META_BLOCK_SIZE);
 	}
 
-	
 	// There is no block able to sustain the requested size.
 	if (head.prev->status == STATUS_FREE) {
 		block_meta_t *expanded_block = expand_last_block(size);
@@ -271,6 +271,26 @@ void *request_heap_memory(size_t size)
 	list_add_last(new_block);
 
 	return ((char *)new_block + META_BLOCK_SIZE);
+}
+
+/**
+ * Traverses the list, searching for a bock whose payload's start
+ * address is ptr.
+ * @return the block, if existing, NULL, otherwise. 
+ */
+block_meta_t *search_block_in_list(void *ptr)
+{
+	block_meta_t *iterator = head.next;
+
+	while (iterator != &head) {
+		if (((char *)iterator + META_BLOCK_SIZE) == ptr) {
+			return iterator;
+		}
+
+		iterator = iterator->next;
+	}
+
+	return NULL;
 }
 
 void *os_malloc(size_t size)
@@ -299,28 +319,13 @@ void *os_malloc(size_t size)
 	}
 }
 
-block_meta_t *search_block_to_free(void *ptr)
-{
-	block_meta_t *iterator = head.next;
-
-	while (iterator != &head) {
-		if (((char *)iterator + META_BLOCK_SIZE) == ptr) {
-			return iterator;
-		}
-
-		iterator = iterator->next;
-	}
-
-	return NULL;
-}
-
 void os_free(void *ptr)
 {
 	if (!ptr) {
 		return;
 	}
 
-	block_meta_t *block = search_block_to_free(ptr);
+	block_meta_t *block = search_block_in_list(ptr);
 
 	if (!block) {
 		return;
@@ -351,7 +356,7 @@ void *os_calloc(size_t nmemb, size_t size)
 
 	if (!head_init_done) {
 		head_init();
-	} 
+	}
 
 	size_t aligned_size = ALIGN(size * nmemb);
 
@@ -374,8 +379,158 @@ void *os_calloc(size_t nmemb, size_t size)
 	}
 }
 
+/**
+ * Trunctaes the memory pointed by the block's payload
+ * to size bytes.
+ * @return address of the requested payload.
+ */
+void *realloc_to_less(block_meta_t *block, size_t size)
+{
+	if (block->status == STATUS_MAPPED) {
+		void *truncate_address = (char *)block + META_BLOCK_SIZE + size;
+		size_t size_to_unmap = block->size - size;
+
+		munmap(truncate_address, size_to_unmap);
+
+		block->size = size;
+
+		return ((char *)block + META_BLOCK_SIZE);
+	}
+
+	// Surely, status is STATUS_ALLOC.
+	split_block_attempt(block, size);
+	return ((char *)block + META_BLOCK_SIZE);
+}
+
+void copy_data_between_blocks(block_meta_t *dest, block_meta_t *src)
+{
+	void *dest_payload = (char *)dest + META_BLOCK_SIZE;
+	void *src_payload = (char *)src + META_BLOCK_SIZE;
+
+	memcpy(dest_payload, src_payload, src->size);
+}
+
+void *realloc_on_heap(block_meta_t *block, size_t size)
+{
+	// Firstly, try to expand the block, coalescing it to adjacent free blocks.
+	block_meta_t *iterator = block->next;
+
+	while (iterator != &head) {
+		if (iterator->status == STATUS_FREE) {
+			coalesce_blocks(block, iterator);
+
+			if (block->size >= size) {
+				break;
+			}
+
+			iterator = iterator->next;
+		} else {
+			break;
+		}
+	}
+
+	if (block->size >= size) {
+		split_block_attempt(block, size);
+		return ((char *)block + META_BLOCK_SIZE);
+	}
+
+	// The block is not big enough, so a reallocation is necessary.
+	block_meta_t *best_block = find_best_block(size);
+
+	if (best_block) {
+		split_block_attempt(best_block, size);
+		best_block->status = STATUS_ALLOC;
+
+		copy_data_between_blocks(best_block, block);
+		block->status = STATUS_FREE;
+
+		return ((char *)best_block + META_BLOCK_SIZE);
+	}
+
+	// There is no block able to sustain the requested size.
+	if (head.prev->status == STATUS_FREE) {
+		block_meta_t *expanded_block = expand_last_block(size);
+		if (!expanded_block) {
+			return NULL;
+		}
+
+		copy_data_between_blocks(expanded_block, block);
+		block->status = STATUS_FREE;
+
+		return ((char *)expanded_block + META_BLOCK_SIZE);
+	}
+
+	// The last block is not free, so a new block should be added.
+	void *request_block = sbrk(META_BLOCK_SIZE + size);
+
+	if (request_block == (void *) -1) {
+		return NULL;
+	}
+
+	block_meta_t *new_block = (block_meta_t *)request_block;
+	new_block->size = size;
+	new_block->status = STATUS_ALLOC;
+	list_add_last(new_block);
+
+	copy_data_between_blocks(new_block, block);
+	block->status = STATUS_FREE;
+
+	return ((char *)new_block + META_BLOCK_SIZE);
+}
+
+/**
+ * Tries to expand the block or reallocate it to a
+ * new zone with the requested size.
+ * @return address of the requested payload.
+ */
+void *realloc_to_more(block_meta_t *block, size_t size)
+{
+	if (block->status == STATUS_MAPPED) {
+		block_meta_t *new_block = map_block_in_mem(size);
+
+		if (!new_block) {
+			return NULL;
+		}
+
+		copy_data_between_blocks(new_block, block);
+
+		list_remove_block(block);
+		size_t size_to_delete = META_BLOCK_SIZE + ALIGN(block->size);
+		munmap(block, size_to_delete);
+
+		return ((char *)new_block + META_BLOCK_SIZE);
+	}
+
+	// Surely, status is STATUS_ALLOC.
+	return realloc_on_heap(block, size);
+}
+
 void *os_realloc(void *ptr, size_t size)
 {
-	/* TODO: Implement os_realloc */
-	return NULL;
+	if (ptr == NULL) {
+		return os_malloc(size);
+	}
+
+	if (size == 0) {
+		os_free(ptr);
+		return NULL;
+	}
+
+	block_meta_t *block = search_block_in_list(ptr);
+
+	if (!block || block ->status == STATUS_FREE) {
+		return NULL;
+	}
+
+	size_t aligned_size = ALIGN(size);
+
+	if (aligned_size == block->size) {
+		return ((char *)block + META_BLOCK_SIZE);
+	}
+
+	if (aligned_size < block->size) {
+		return realloc_to_less(block, aligned_size);
+	} else {
+		return realloc_to_more(block, aligned_size);
+	}
 }

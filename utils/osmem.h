@@ -23,6 +23,7 @@ void *os_realloc(void *ptr, size_t size);
 void head_init(void);
 void list_add_last(block_meta_t *block);
 void list_remove_block(block_meta_t *block);
+block_meta_t *search_block_in_list(void *ptr);
 
 block_meta_t *map_block_in_mem(size_t size);
 
@@ -31,4 +32,5 @@ void *request_heap_memory(size_t size);
 block_meta_t *find_best_block(size_t size);
 void split_block_attempt(block_meta_t *block, size_t size);
 block_meta_t *expand_last_block(size_t size);
-void *request_heap_memory(size_t size);
+void *realloc_to_less(block_meta_t *block, size_t size);
+void *realloc_to_more(block_meta_t *block, size_t size);
