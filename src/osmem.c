@@ -251,10 +251,12 @@ void *request_heap_memory(size_t size)
 	// There is no block able to sustain the requested size.
 	if (head.prev->status == STATUS_FREE) {
 		block_meta_t *expanded_block = expand_last_block(size);
+
 		if (!expanded_block) {
 			return NULL;
 		}
 
+		expanded_block->status = STATUS_ALLOC;
 		return ((char *)expanded_block + META_BLOCK_SIZE);
 	}
 
@@ -274,7 +276,7 @@ void *request_heap_memory(size_t size)
 }
 
 /**
- * Traverses the list, searching for a bock whose payload's start
+ * Traverses the list, searching for a block whose payload's start
  * address is ptr.
  * @return the block, if existing, NULL, otherwise. 
  */
@@ -379,88 +381,68 @@ void *os_calloc(size_t nmemb, size_t size)
 	}
 }
 
-/**
- * Trunctaes the memory pointed by the block's payload
- * to size bytes.
- * @return address of the requested payload.
- */
-void *realloc_to_less(block_meta_t *block, size_t size)
+
+
+
+
+
+
+
+
+
+void delete_mapped_block(block_meta_t *block)
 {
-	if (block->status == STATUS_MAPPED) {
-		void *truncate_address = (char *)block + META_BLOCK_SIZE + size;
-		size_t size_to_unmap = block->size - size;
-
-		munmap(truncate_address, size_to_unmap);
-
-		block->size = size;
-
-		return ((char *)block + META_BLOCK_SIZE);
+	if (block->status != STATUS_MAPPED) {
+		return;
 	}
 
-	// Surely, status is STATUS_ALLOC.
-	split_block_attempt(block, size);
-	return ((char *)block + META_BLOCK_SIZE);
+	list_remove_block(block);
+	munmap(block, block->size + META_BLOCK_SIZE);
 }
 
-void copy_data_between_blocks(block_meta_t *dest, block_meta_t *src)
+
+
+
+
+
+
+void copy_block(block_meta_t *dest, block_meta_t *src, size_t size)
 {
 	void *dest_payload = (char *)dest + META_BLOCK_SIZE;
 	void *src_payload = (char *)src + META_BLOCK_SIZE;
 
-	memcpy(dest_payload, src_payload, src->size);
+	memcpy(dest_payload, src_payload, size);
 }
 
-void *realloc_on_heap(block_meta_t *block, size_t size)
+/**
+ * Returns a free heap block of requested size.
+ */
+block_meta_t *get_free_heap_block(size_t size)
 {
-	// Firstly, try to expand the block, coalescing it to adjacent free blocks.
-	block_meta_t *iterator = block->next;
-
-	while (iterator != &head) {
-		if (iterator->status == STATUS_FREE) {
-			coalesce_blocks(block, iterator);
-
-			if (block->size >= size) {
-				break;
-			}
-
-			iterator = iterator->next;
-		} else {
-			break;
-		}
+	if (!prealloc_heap_attempt()) {
+		return NULL;
 	}
 
-	if (block->size >= size) {
-		split_block_attempt(block, size);
-		return ((char *)block + META_BLOCK_SIZE);
-	}
+	coalesce_attempt();
 
-	// The block is not big enough, so a reallocation is necessary.
 	block_meta_t *best_block = find_best_block(size);
 
 	if (best_block) {
 		split_block_attempt(best_block, size);
-		best_block->status = STATUS_ALLOC;
-
-		copy_data_between_blocks(best_block, block);
-		block->status = STATUS_FREE;
-
-		return ((char *)best_block + META_BLOCK_SIZE);
+		return best_block;
 	}
 
 	// There is no block able to sustain the requested size.
+	// Try to expand the last block, if it is free.
 	if (head.prev->status == STATUS_FREE) {
 		block_meta_t *expanded_block = expand_last_block(size);
 		if (!expanded_block) {
 			return NULL;
 		}
-
-		copy_data_between_blocks(expanded_block, block);
-		block->status = STATUS_FREE;
-
-		return ((char *)expanded_block + META_BLOCK_SIZE);
+		return expanded_block;
 	}
 
-	// The last block is not free, so a new block should be added.
+	// The last block is not free, so a new block is created.
 	void *request_block = sbrk(META_BLOCK_SIZE + size);
 
 	if (request_block == (void *) -1) {
@@ -469,40 +451,52 @@ void *realloc_on_heap(block_meta_t *block, size_t size)
 
 	block_meta_t *new_block = (block_meta_t *)request_block;
 	new_block->size = size;
-	new_block->status = STATUS_ALLOC;
+
 	list_add_last(new_block);
-
-	copy_data_between_blocks(new_block, block);
-	block->status = STATUS_FREE;
-
-	return ((char *)new_block + META_BLOCK_SIZE);
+	
+	return new_block;
 }
 
 /**
- * Tries to expand the block or reallocate it to a
- * new zone with the requested size.
- * @return address of the requested payload.
+ * Reallocates memory to a smaller size.
  */
-void *realloc_to_more(block_meta_t *block, size_t size)
+void *shrink_realloc(block_meta_t *block, size_t size)
 {
 	if (block->status == STATUS_MAPPED) {
-		block_meta_t *new_block = map_block_in_mem(size);
+		if (size >= MMAP_THRESHOLD) {
+			// Shrink mapped block to another mapped block.
+			block_meta_t *new_map_block = map_block_in_mem(size);
+			if (!new_map_block) {
+				return NULL;
+			}
 
-		if (!new_block) {
-			return NULL;
+			copy_block(new_map_block, block, new_map_block->size);
+			
+			delete_mapped_block(block);
+			return ((char *)new_map_block + META_BLOCK_SIZE);
 		}
 
-		copy_data_between_blocks(new_block, block);
-
-		list_remove_block(block);
-		size_t size_to_delete = META_BLOCK_SIZE + ALIGN(block->size);
-		munmap(block, size_to_delete);
-
-		return ((char *)new_block + META_BLOCK_SIZE);
+		// Shrink mapped block to a block on heap.
+		block_meta_t *heap_block = get_free_heap_block(size);
+		if (!heap_block) {
+			return NULL;
+		}
+		
+		heap_block->status = STATUS_ALLOC;
+		
+		copy_block(heap_block, block, heap_block->size);
+		delete_mapped_block(block);
+		return ((char *)heap_block + META_BLOCK_SIZE);
 	}
+}
 
-	// Surely, status is STATUS_ALLOC.
-	return realloc_on_heap(block, size);
+/**
+ * Reallocates memory to a bigger size.
+ */
+void *extend_realloc(block_meta_t *block, size_t size)
+{
+	// TODO
+	return NULL;
 }
 
 void *os_realloc(void *ptr, size_t size)
@@ -516,21 +510,21 @@ void *os_realloc(void *ptr, size_t size)
 		return NULL;
 	}
 
-	block_meta_t *block = search_block_in_list(ptr);
-
-	if (!block || block ->status == STATUS_FREE) {
+	block_meta_t *req_block = search_block_in_list(ptr);
+	if (!req_block || req_block->status == STATUS_FREE) {
 		return NULL;
 	}
 
 	size_t aligned_size = ALIGN(size);
 
-	if (aligned_size == block->size) {
-		return ((char *)block + META_BLOCK_SIZE);
+	if (aligned_size == req_block->size) {
+		// No realloc necessary.
+		return ((char *)req_block + META_BLOCK_SIZE);
 	}
 
-	if (aligned_size < block->size) {
-		return realloc_to_less(block, aligned_size);
-	} else {
-		return realloc_to_more(block, aligned_size);
+	if (aligned_size < req_block->size) {
+		return shrink_realloc(req_block, size);
 	}
+	
+	return extend_realloc(req_block, size);
 }
