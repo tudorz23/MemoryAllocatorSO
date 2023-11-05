@@ -401,11 +401,6 @@ void delete_mapped_block(block_meta_t *block)
 }
 
 
-
-
-
-
-
 void copy_block(block_meta_t *dest, block_meta_t *src, size_t size)
 {
 	void *dest_payload = (char *)dest + META_BLOCK_SIZE;
@@ -488,6 +483,30 @@ void *shrink_realloc(block_meta_t *block, size_t size)
 		delete_mapped_block(block);
 		return ((char *)heap_block + META_BLOCK_SIZE);
 	}
+
+	// Shrink alloc'd block.
+	split_block_attempt(block, size);
+	return ((char *)block + META_BLOCK_SIZE);
+}
+
+void block_coalesce_to_size(block_meta_t *block, size_t size)
+{
+	block_meta_t *iterator = block->next;
+
+	while (iterator != &head) {
+		if (iterator->status == STATUS_FREE) {
+			coalesce_blocks(block, iterator);
+
+			if (block->size >= size) {
+				break;
+			}
+
+			iterator = iterator->next;
+			continue;
+		} else {
+			break;
+		}
+	}
 }
 
 /**
@@ -495,8 +514,50 @@ void *shrink_realloc(block_meta_t *block, size_t size)
  */
 void *extend_realloc(block_meta_t *block, size_t size)
 {
-	// TODO
-	return NULL;
+	if (block->status == STATUS_MAPPED) {
+		block_meta_t *new_map_block = map_block_in_mem(size);
+		if (!new_map_block) {
+			return NULL;
+		}
+
+		copy_block(new_map_block, block, block->size);
+		delete_mapped_block(block);
+		return ((char *)new_map_block + META_BLOCK_SIZE);
+	}
+
+	// Original block was alloc'd.
+	if (size >= MMAP_THRESHOLD) {
+		block_meta_t *new_map_block = map_block_in_mem(size);
+		if (!new_map_block) {
+			return NULL;
+		}
+
+		copy_block(new_map_block, block, block->size);
+		block->status = STATUS_FREE;
+		return ((char *)new_map_block + META_BLOCK_SIZE);
+	}
+
+	// Try to extend current block, coalescing it to adjacent free blocks.
+	size_t original_block_size = block->size;
+	block_coalesce_to_size(block, size);
+
+	if (block->size >= size) {
+		split_block_attempt(block, size);
+		return ((char *)block + META_BLOCK_SIZE);
+	}
+
+	// The block is still not big enough, so a reallocation is necessary.
+	block_meta_t *heap_block = get_free_heap_block(size);
+	if (!heap_block) {
+		return NULL;
+	}
+
+	heap_block->status = STATUS_ALLOC;
+
+	copy_block(heap_block, block, original_block_size);
+	block->status = STATUS_FREE;
+
+	return ((char *)heap_block + META_BLOCK_SIZE);
 }
 
 void *os_realloc(void *ptr, size_t size)
@@ -522,9 +583,12 @@ void *os_realloc(void *ptr, size_t size)
 		return ((char *)req_block + META_BLOCK_SIZE);
 	}
 
-	if (aligned_size < req_block->size) {
-		return shrink_realloc(req_block, size);
+	if (aligned_size > req_block->size) {
+		return extend_realloc(req_block, aligned_size);
 	}
-	
-	return extend_realloc(req_block, size);
+
+	if (aligned_size < req_block->size) {
+		return shrink_realloc(req_block, aligned_size);
+	}
+	return NULL;
 }
