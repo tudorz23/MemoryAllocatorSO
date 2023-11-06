@@ -497,6 +497,19 @@ void *extend_realloc(block_meta_t *block, size_t size)
 		return ((char *)block + META_BLOCK_SIZE);
 	}
 
+	// Check if it is the last block. If so, just extend it.
+	if (block == head.prev) {
+		size_t necessary_size = size - block->size;
+
+		void *added_size = sbrk(necessary_size);
+		if (!added_size) {
+			return NULL;
+		}
+
+		block->size = size;
+		return ((char *)block + META_BLOCK_SIZE);
+	}
+
 	// The block is still not big enough, so a reallocation is necessary.
 	block_meta_t *heap_block = get_free_heap_block(size);
 	if (!heap_block) {
