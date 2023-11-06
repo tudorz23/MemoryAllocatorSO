@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-#include "osmem.h"
+#include "utils_src.h"
 
 block_meta_t head;
 int head_init_done;

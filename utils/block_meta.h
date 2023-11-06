@@ -23,14 +23,6 @@ struct block_meta {
 	struct block_meta *next;
 };
 
-typedef struct block_meta block_meta_t;
-
-// Taken from "Resources" -> "Implementing malloc"
-#define ALIGNMENT 8
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
-
-#define META_BLOCK_SIZE ALIGN(sizeof(struct block_meta))
-
 /* Block metadata status values */
 #define STATUS_FREE   0
 #define STATUS_ALLOC  1
