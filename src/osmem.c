@@ -400,7 +400,7 @@ void copy_block(block_meta_t *dest, block_meta_t *src, size_t size)
 	void *dest_payload = (char *)dest + META_BLOCK_SIZE;
 	void *src_payload = (char *)src + META_BLOCK_SIZE;
 
-	memcpy(dest_payload, src_payload, size);
+	memmove(dest_payload, src_payload, size);
 }
 
 /**
@@ -488,15 +488,6 @@ void *extend_realloc(block_meta_t *block, size_t size)
 		return ((char *)new_map_block + META_BLOCK_SIZE);
 	}
 
-	// Try to extend current block, coalescing it to adjacent free blocks.
-	size_t original_block_size = block->size;
-	block_coalesce_to_size(block, size);
-
-	if (block->size >= size) {
-		split_block_attempt(block, size);
-		return ((char *)block + META_BLOCK_SIZE);
-	}
-
 	// Check if it is the last block. If so, just extend it.
 	if (block == head.prev) {
 		size_t necessary_size = size - block->size;
@@ -507,6 +498,15 @@ void *extend_realloc(block_meta_t *block, size_t size)
 		}
 
 		block->size = size;
+		return ((char *)block + META_BLOCK_SIZE);
+	}
+
+	// Try to extend current block, coalescing it to adjacent free blocks.
+	size_t original_block_size = block->size;
+	block_coalesce_to_size(block, size);
+
+	if (block->size >= size) {
+		split_block_attempt(block, size);
 		return ((char *)block + META_BLOCK_SIZE);
 	}
 
@@ -523,6 +523,7 @@ void *extend_realloc(block_meta_t *block, size_t size)
 
 	return ((char *)heap_block + META_BLOCK_SIZE);
 }
+
 
 void *os_realloc(void *ptr, size_t size)
 {
