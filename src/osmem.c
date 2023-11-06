@@ -3,8 +3,8 @@
 #include "osmem.h"
 
 block_meta_t head;
-int head_init_done = 0;
-int heap_prealloc_done = 0;
+int head_init_done;
+int heap_prealloc_done;
 
 /**
  * Initialize the head of the circular list. The head will be a permanent,
@@ -91,7 +91,7 @@ int prealloc_heap_attempt(void)
 }
 
 /**
- * Traverses the list and searches for the block that best fits
+ * Traverses the list and searches for the free block that best fits
  * the size requested.
  * @return start adress of the best fit block, if it exists, NULL, otherwise.
  */
@@ -101,11 +101,7 @@ block_meta_t *find_best_block(size_t size)
 	block_meta_t *best_fit = NULL;
 
 	while (iterator != &head) {
-		if (iterator->status == STATUS_FREE && iterator->size >= size) {
-			if (iterator->size == size) {
-				return iterator;
-			}
-
+		if (iterator->status == STATUS_FREE && iterator->size >= ALIGN(size)) {
 			if (!best_fit || iterator->size < best_fit->size) {
 				best_fit = iterator;
 			}
@@ -125,25 +121,25 @@ block_meta_t *find_best_block(size_t size)
  */
 void split_block_attempt(block_meta_t *block, size_t size)
 {
-	if (block->size == size) {
+	if (block->size == ALIGN(size)) {
 		return;
 	}
 
-	// If split happens, the payload of @block will be occupied by the
-	// requested size and a new block_meta_t structure.
-	size_t occupied_size = size + META_BLOCK_SIZE;
+	// If split happens, the payload of @block would be occupied by the
+	// requested size and a new block_meta_t structure and at least 1 free byte.
+	size_t minimum_occupied_size = ALIGN(size) + META_BLOCK_SIZE + 1;
 
-	if (occupied_size + 1 >= block->size) {
+	if (minimum_occupied_size >= block->size) {
 		// No split is performed.
 		return;
 	}
 
-	block_meta_t *new_block = (block_meta_t *)((char *)block + META_BLOCK_SIZE + size);
+	block_meta_t *new_block = (block_meta_t *)((char *)block + META_BLOCK_SIZE + ALIGN(size));
 
-	new_block->size = block->size - occupied_size;
+	new_block->size = block->size - ALIGN(size) - META_BLOCK_SIZE;
 	new_block->status = STATUS_FREE;
 
-	block->size -= occupied_size;
+	block->size = ALIGN(size);
 
 	// Add new block in the list.
 	new_block->next = block->next;
@@ -194,15 +190,9 @@ void coalesce_attempt(void)
 	block_meta_t *to_coalesce2 = NULL;
 
 	while (iterator != &head) {
-		if (iterator->status == STATUS_ALLOC) {
+		if (iterator->status == STATUS_ALLOC || iterator->status == STATUS_MAPPED) {
 			to_coalesce1 = NULL;
 			to_coalesce2 = NULL;
-			iterator = iterator->next;
-			continue;
-		}
-
-		// Two free blocks separated by a mapped block can still be coalesced.
-		if (iterator->status == STATUS_MAPPED) {
 			iterator = iterator->next;
 			continue;
 		}
@@ -221,58 +211,6 @@ void coalesce_attempt(void)
 
 		coalesce_blocks(to_coalesce1, to_coalesce2);
 	}
-}
-
-/**
- * Searches the list for the memory zone allocated on the heap
- * that best fits the requested @size.
- * If no fit is found, the last block is expanded if free.
- * If it is not free, a new block is allocated.
- * To be called when memory allocated with sbrk() is needed.
- * @return allocated memory in case of success, NULL otherwise
- */
-void *request_heap_memory(size_t size)
-{
-	if (!prealloc_heap_attempt()) {
-		// sbrk() failed during preallocation
-		return NULL;
-	}
-
-	coalesce_attempt();
-
-	block_meta_t *best_block = find_best_block(size);
-
-	if (best_block) {
-		split_block_attempt(best_block, size);
-		best_block->status = STATUS_ALLOC;
-		return ((char *)best_block + META_BLOCK_SIZE);
-	}
-
-	// There is no block able to sustain the requested size.
-	if (head.prev->status == STATUS_FREE) {
-		block_meta_t *expanded_block = expand_last_block(size);
-
-		if (!expanded_block) {
-			return NULL;
-		}
-
-		expanded_block->status = STATUS_ALLOC;
-		return ((char *)expanded_block + META_BLOCK_SIZE);
-	}
-
-	// The last block is not free, so a new block should be added.
-	void *request_block = sbrk(META_BLOCK_SIZE + size);
-
-	if (request_block == (void *) -1) {
-		return NULL;
-	}
-
-	block_meta_t *new_block = (block_meta_t *)request_block;
-	new_block->size = size;
-	new_block->status = STATUS_ALLOC;
-	list_add_last(new_block);
-
-	return ((char *)new_block + META_BLOCK_SIZE);
 }
 
 /**
@@ -295,6 +233,58 @@ block_meta_t *search_block_in_list(void *ptr)
 	return NULL;
 }
 
+/**
+ * Searches the list for the memory zone allocated on the heap
+ * that best fits the requested @size.
+ * If no fit is found, the last block is expanded if free.
+ * If it is not free, a new block is allocated.
+ * To be called when memory allocated with sbrk() is needed.
+ * @return allocated memory in case of success, NULL otherwise
+ */
+block_meta_t *get_free_heap_block(size_t size)
+{
+	if (!prealloc_heap_attempt()) {
+		// sbrk() failed during preallocation
+		return NULL;
+	}
+
+	coalesce_attempt();
+
+	block_meta_t *best_block = find_best_block(ALIGN(size));
+
+	if (best_block) {
+		split_block_attempt(best_block, ALIGN(size));
+		return best_block;
+	}
+
+	// There is no block able to sustain the requested size.
+	// Try to expand the last block, if it is free.
+	if (head.prev->status == STATUS_FREE) {
+		block_meta_t *expanded_block = expand_last_block(ALIGN(size));
+
+		if (!expanded_block) {
+			return NULL;
+		}
+
+		return expanded_block;
+	}
+
+	// The last block is not free, so a new block is created.
+	void *request_block = sbrk(META_BLOCK_SIZE + ALIGN(size));
+
+	if (request_block == (void *) -1) {
+		return NULL;
+	}
+
+	block_meta_t *new_block = (block_meta_t *)request_block;
+	new_block->size = ALIGN(size);
+
+	list_add_last(new_block);
+	
+	return new_block;
+}
+
+
 void *os_malloc(size_t size)
 {
 	if (size <= 0) {
@@ -311,7 +301,15 @@ void *os_malloc(size_t size)
 	size_t aligned_size = ALIGN(size);
 
 	if (aligned_size + META_BLOCK_SIZE < MMAP_THRESHOLD) {
-		return request_heap_memory(aligned_size);
+		block_meta_t *heap_block = get_free_heap_block(aligned_size);
+
+		if (!heap_block) {
+			return NULL;
+		}
+
+		heap_block->status = STATUS_ALLOC;
+		return (heap_block + 1);
+
 	} else {
 		block_meta_t *block = map_block_in_mem(aligned_size);
 		if (!block) {
@@ -363,13 +361,14 @@ void *os_calloc(size_t nmemb, size_t size)
 	size_t aligned_size = ALIGN(size * nmemb);
 
 	if ((long)(aligned_size + META_BLOCK_SIZE) < (long)getpagesize()) {
-		void *result = request_heap_memory(aligned_size);
-		if (!result) {
+		block_meta_t *heap_block = get_free_heap_block(aligned_size);
+		if (!heap_block) {
 			return NULL;
 		}
 
-		memset(result, 0, aligned_size);
-		return result;
+		heap_block->status = STATUS_ALLOC;
+		memset(heap_block + 1, 0, aligned_size);
+		return heap_block + 1;
 	} else {
 		block_meta_t *block = map_block_in_mem(aligned_size);
 		if (!block) {
@@ -380,11 +379,6 @@ void *os_calloc(size_t nmemb, size_t size)
 		return result;
 	}
 }
-
-
-
-
-
 
 
 
@@ -407,49 +401,6 @@ void copy_block(block_meta_t *dest, block_meta_t *src, size_t size)
 	void *src_payload = (char *)src + META_BLOCK_SIZE;
 
 	memcpy(dest_payload, src_payload, size);
-}
-
-/**
- * Returns a free heap block of requested size.
- */
-block_meta_t *get_free_heap_block(size_t size)
-{
-	if (!prealloc_heap_attempt()) {
-		return NULL;
-	}
-
-	coalesce_attempt();
-
-	block_meta_t *best_block = find_best_block(size);
-
-	if (best_block) {
-		split_block_attempt(best_block, size);
-		return best_block;
-	}
-
-	// There is no block able to sustain the requested size.
-	// Try to expand the last block, if it is free.
-	if (head.prev->status == STATUS_FREE) {
-		block_meta_t *expanded_block = expand_last_block(size);
-		if (!expanded_block) {
-			return NULL;
-		}
-		return expanded_block;
-	}
-
-	// The last block is not free, so a new block is created.
-	void *request_block = sbrk(META_BLOCK_SIZE + size);
-
-	if (request_block == (void *) -1) {
-		return NULL;
-	}
-
-	block_meta_t *new_block = (block_meta_t *)request_block;
-	new_block->size = size;
-
-	list_add_last(new_block);
-	
-	return new_block;
 }
 
 /**
