@@ -363,7 +363,7 @@ void *os_calloc(size_t nmemb, size_t size)
 
 	block_meta_t *block = map_block_in_mem(aligned_size);
 
-	if (!block) 
+	if (!block)
 		return NULL;
 
 	void *result = (char *)block + META_BLOCK_SIZE;
