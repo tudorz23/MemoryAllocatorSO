@@ -188,10 +188,15 @@ void coalesce_attempt(void)
 	block_meta_t *to_coalesce2 = NULL;
 
 	while (iterator != &head) {
-		if (iterator->status == STATUS_ALLOC
-			|| iterator->status == STATUS_MAPPED) {
+		if (iterator->status == STATUS_ALLOC) {
 			to_coalesce1 = NULL;
 			to_coalesce2 = NULL;
+			iterator = iterator->next;
+			continue;
+		}
+
+		// Skip mapped blocks.
+		if (iterator->status == STATUS_MAPPED) {
 			iterator = iterator->next;
 			continue;
 		}
@@ -237,7 +242,7 @@ block_meta_t *search_block_in_list(void *ptr)
  * If no fit is found, the last block is expanded if free.
  * If it is not free, a new block is allocated.
  * To be called when memory allocated with sbrk() is needed.
- * @return allocated memory in case of success, NULL otherwise
+ * @return allocated memory in case of success, NULL otherwise.
  */
 block_meta_t *get_free_heap_block(size_t size)
 {
@@ -301,7 +306,7 @@ void *os_malloc(size_t size)
 			return NULL;
 
 		heap_block->status = STATUS_ALLOC;
-		return (heap_block + 1);
+		return (void *)((char *)heap_block + META_BLOCK_SIZE);
 
 	} else {
 		block_meta_t *block = map_block_in_mem(aligned_size);
@@ -309,7 +314,7 @@ void *os_malloc(size_t size)
 		if (!block)
 			return NULL;
 
-		return ((char *)block + META_BLOCK_SIZE);
+		return (void *)((char *)block + META_BLOCK_SIZE);
 	}
 }
 
@@ -350,6 +355,10 @@ void *os_calloc(size_t nmemb, size_t size)
 
 	size_t aligned_size = ALIGN(size * nmemb);
 
+	// Check for overflow.
+	if (aligned_size < size || aligned_size < nmemb)
+		return NULL; 
+
 	if ((long)(aligned_size + META_BLOCK_SIZE) < (long)getpagesize()) {
 		block_meta_t *heap_block = get_free_heap_block(aligned_size);
 
@@ -358,7 +367,7 @@ void *os_calloc(size_t nmemb, size_t size)
 
 		heap_block->status = STATUS_ALLOC;
 		memset((char *)heap_block + META_BLOCK_SIZE, 0, aligned_size);
-		return ((char *)heap_block + META_BLOCK_SIZE);
+		return (void *)((char *)heap_block + META_BLOCK_SIZE);
 	}
 
 	block_meta_t *block = map_block_in_mem(aligned_size);
@@ -411,7 +420,7 @@ void *shrink_realloc(block_meta_t *block, size_t size)
 			copy_block(new_map_block, block, new_map_block->size);
 
 			delete_mapped_block(block);
-			return ((char *)new_map_block + META_BLOCK_SIZE);
+			return (void *)((char *)new_map_block + META_BLOCK_SIZE);
 		}
 
 		// Shrink mapped block to a block on heap.
@@ -425,12 +434,12 @@ void *shrink_realloc(block_meta_t *block, size_t size)
 		copy_block(heap_block, block, heap_block->size);
 		delete_mapped_block(block);
 
-		return ((char *)heap_block + META_BLOCK_SIZE);
+		return (void *)((char *)heap_block + META_BLOCK_SIZE);
 	}
 
 	// Shrink alloc'd block.
 	split_block_attempt(block, size);
-	return ((char *)block + META_BLOCK_SIZE);
+	return (void *)((char *)block + META_BLOCK_SIZE);
 }
 
 /**
@@ -456,6 +465,25 @@ void block_coalesce_to_size(block_meta_t *block, size_t size)
 }
 
 /**
+ * Checks whether the given block is the last one allocated on the heap.
+ * @return 1 if it is the last, 0 otherwise.
+ */
+int check_last_on_heap(block_meta_t *block)
+{
+	block_meta_t *last_block = head.prev;
+
+	// Skip mapped blocks that might be at the end of the list.
+	while (last_block->status == STATUS_MAPPED && last_block != &head)
+		last_block = last_block->prev;
+
+	if (last_block == block) {
+		return 1;
+	}
+
+	return 0;
+}
+
+/**
  * Reallocates memory to a bigger size.
  */
 void *extend_realloc(block_meta_t *block, size_t size)
@@ -469,7 +497,7 @@ void *extend_realloc(block_meta_t *block, size_t size)
 		copy_block(new_map_block, block, block->size);
 		delete_mapped_block(block);
 
-		return ((char *)new_map_block + META_BLOCK_SIZE);
+		return (void *)((char *)new_map_block + META_BLOCK_SIZE);
 	}
 
 	// Original block was alloc'd.
@@ -482,11 +510,11 @@ void *extend_realloc(block_meta_t *block, size_t size)
 		copy_block(new_map_block, block, block->size);
 		block->status = STATUS_FREE;
 
-		return ((char *)new_map_block + META_BLOCK_SIZE);
+		return (void *)((char *)new_map_block + META_BLOCK_SIZE);
 	}
 
-	// Check if it is the last block. If so, just extend it.
-	if (block == head.prev) {
+	// Check if it is the last block from heap. If so, just extend it.
+	if (check_last_on_heap(block)) {
 		size_t necessary_size = size - block->size;
 
 		void *added_size = sbrk(necessary_size);
@@ -496,7 +524,7 @@ void *extend_realloc(block_meta_t *block, size_t size)
 
 		block->size = size;
 
-		return ((char *)block + META_BLOCK_SIZE);
+		return (void *)((char *)block + META_BLOCK_SIZE);
 	}
 
 	// Try to extend current block, coalescing it to adjacent free blocks.
@@ -506,7 +534,7 @@ void *extend_realloc(block_meta_t *block, size_t size)
 
 	if (block->size >= size) {
 		split_block_attempt(block, size);
-		return ((char *)block + META_BLOCK_SIZE);
+		return (void *)((char *)block + META_BLOCK_SIZE);
 	}
 
 	// The block is still not big enough, so a reallocation is necessary.
@@ -520,7 +548,7 @@ void *extend_realloc(block_meta_t *block, size_t size)
 	copy_block(heap_block, block, original_block_size);
 	block->status = STATUS_FREE;
 
-	return ((char *)heap_block + META_BLOCK_SIZE);
+	return (void *)((char *)heap_block + META_BLOCK_SIZE);
 }
 
 void *os_realloc(void *ptr, size_t size)
@@ -542,7 +570,7 @@ void *os_realloc(void *ptr, size_t size)
 
 	if (aligned_size == req_block->size) {
 		// No realloc necessary.
-		return ((char *)req_block + META_BLOCK_SIZE);
+		return (void *)((char *)req_block + META_BLOCK_SIZE);
 	}
 
 	if (aligned_size > req_block->size)
