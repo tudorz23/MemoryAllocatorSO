@@ -357,7 +357,7 @@ void *os_calloc(size_t nmemb, size_t size)
 
 	// Check for overflow.
 	if (aligned_size < size || aligned_size < nmemb)
-		return NULL; 
+		return NULL;
 
 	if ((long)(aligned_size + META_BLOCK_SIZE) < (long)getpagesize()) {
 		block_meta_t *heap_block = get_free_heap_block(aligned_size);
