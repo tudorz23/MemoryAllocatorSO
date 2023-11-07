@@ -476,9 +476,8 @@ int check_last_on_heap(block_meta_t *block)
 	while (last_block->status == STATUS_MAPPED && last_block != &head)
 		last_block = last_block->prev;
 
-	if (last_block == block) {
+	if (last_block == block)
 		return 1;
-	}
 
 	return 0;
 }
