@@ -31,7 +31,7 @@ void coalesce_blocks(block_meta_t *block1, block_meta_t *block2);
 void coalesce_attempt(void);
 block_meta_t *search_block_in_list(void *ptr);
 block_meta_t *get_free_heap_block(size_t size);
-int check_last_on_heap(block_meta_t *block);
+block_meta_t *get_last_on_heap(void);
 
 void delete_mapped_block(block_meta_t *block);
 void copy_block(block_meta_t *dest, block_meta_t *src, size_t size);

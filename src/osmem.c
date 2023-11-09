@@ -153,7 +153,7 @@ void split_block_attempt(block_meta_t *block, size_t size)
  */
 block_meta_t *expand_last_block(size_t size)
 {
-	block_meta_t *last_block = head.prev;
+	block_meta_t *last_block = get_last_on_heap();
 	size_t additional_needed_size = size - last_block->size;
 
 	void *heap_end = (char *)last_block + META_BLOCK_SIZE + last_block->size;
@@ -237,6 +237,22 @@ block_meta_t *search_block_in_list(void *ptr)
 }
 
 /**
+ * @return The last block allocated on the heap, if it exists,
+ * or NULL, otherwise.
+ */
+block_meta_t *get_last_on_heap(void)
+{
+	block_meta_t *iterator = head.prev;
+
+	while (iterator->status == STATUS_MAPPED && iterator != &head)
+		iterator = iterator->prev;
+
+	if (iterator == &head)
+		return NULL;
+
+	return iterator;
+}
+/**
  * Searches the list for the memory zone allocated on the heap
  * that best fits the requested @size.
  * If no fit is found, the last block is expanded if free.
@@ -262,7 +278,9 @@ block_meta_t *get_free_heap_block(size_t size)
 
 	// There is no block able to sustain the requested size.
 	// Try to expand the last block, if it is free.
-	if (head.prev->status == STATUS_FREE) {
+	block_meta_t *last_on_heap = get_last_on_heap();
+
+	if (last_on_heap != NULL && last_on_heap->status == STATUS_FREE) {
 		block_meta_t *expanded_block = expand_last_block(ALIGN(size));
 
 		if (!expanded_block)
@@ -443,7 +461,7 @@ void *shrink_realloc(block_meta_t *block, size_t size)
 }
 
 /**
- * Coalesces block to adjacent free blocks until its size exceeds size.
+ * Coalesces heap block to adjacent free blocks until its size exceeds size.
  */
 void block_coalesce_to_size(block_meta_t *block, size_t size)
 {
@@ -458,28 +476,13 @@ void block_coalesce_to_size(block_meta_t *block, size_t size)
 
 			iterator = iterator->next;
 			continue;
+		} else if (iterator->status == STATUS_MAPPED) {
+			iterator = iterator->next;
+			continue;
 		} else {
 			break;
 		}
 	}
-}
-
-/**
- * Checks whether the given block is the last one allocated on the heap.
- * @return 1 if it is the last, 0 otherwise.
- */
-int check_last_on_heap(block_meta_t *block)
-{
-	block_meta_t *last_block = head.prev;
-
-	// Skip mapped blocks that might be at the end of the list.
-	while (last_block->status == STATUS_MAPPED && last_block != &head)
-		last_block = last_block->prev;
-
-	if (last_block == block)
-		return 1;
-
-	return 0;
 }
 
 /**
@@ -513,7 +516,7 @@ void *extend_realloc(block_meta_t *block, size_t size)
 	}
 
 	// Check if it is the last block from heap. If so, just extend it.
-	if (check_last_on_heap(block)) {
+	if (block == get_last_on_heap()) {
 		size_t necessary_size = size - block->size;
 
 		void *added_size = sbrk(necessary_size);
