@@ -154,6 +154,10 @@ void split_block_attempt(block_meta_t *block, size_t size)
 block_meta_t *expand_last_block(size_t size)
 {
 	block_meta_t *last_block = get_last_on_heap();
+
+	if (!last_block)
+		return NULL;
+
 	size_t additional_needed_size = size - last_block->size;
 
 	void *heap_end = (char *)last_block + META_BLOCK_SIZE + last_block->size;
@@ -393,7 +397,7 @@ void *os_calloc(size_t nmemb, size_t size)
 	if (!block)
 		return NULL;
 
-	void *result = (char *)block + META_BLOCK_SIZE;
+	void *result = (void *)((char *)block + META_BLOCK_SIZE);
 
 	memset(result, 0, aligned_size);
 	return result;
@@ -416,8 +420,8 @@ void delete_mapped_block(block_meta_t *block)
  */
 void copy_block(block_meta_t *dest, block_meta_t *src, size_t size)
 {
-	void *dest_payload = (char *)dest + META_BLOCK_SIZE;
-	void *src_payload = (char *)src + META_BLOCK_SIZE;
+	void *dest_payload = (void *)((char *)dest + META_BLOCK_SIZE);
+	void *src_payload = (void *)((char *)src + META_BLOCK_SIZE);
 
 	memmove(dest_payload, src_payload, size);
 }
