@@ -354,10 +354,7 @@ void os_free(void *ptr)
 		return;
 
 	if (block->status == STATUS_MAPPED) {
-		list_remove_block(block);
-		size_t size_to_delete = META_BLOCK_SIZE + ALIGN(block->size);
-
-		munmap(block, size_to_delete);
+		delete_mapped_block(block);
 		return;
 	}
 
@@ -412,7 +409,9 @@ void delete_mapped_block(block_meta_t *block)
 		return;
 
 	list_remove_block(block);
-	munmap(block, block->size + META_BLOCK_SIZE);
+	int munmap_ret_val = munmap(block, block->size + META_BLOCK_SIZE);
+
+	DIE(munmap_ret_val == -1, "Critical error: munmap() failed.\n");
 }
 
 /**
@@ -520,15 +519,13 @@ void *extend_realloc(block_meta_t *block, size_t size)
 	}
 
 	// Check if it is the last block from heap. If so, just extend it.
-	if (block == get_last_on_heap()) {
-		size_t necessary_size = size - block->size;
+	block_meta_t *last_on_heap = get_last_on_heap();
 
-		void *added_size = sbrk(necessary_size);
+	if (block == last_on_heap) {
+		block = expand_last_block(size);
 
-		if (!added_size)
+		if (!block)
 			return NULL;
-
-		block->size = size;
 
 		return (void *)((char *)block + META_BLOCK_SIZE);
 	}
